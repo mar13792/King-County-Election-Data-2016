@@ -1,0 +1,248 @@
+---
+title: "King County Election Data Cleaning Project"
+author: "Meg Robertson"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+![image of voters submitting ballots](/Users/Meg/Desktop/Career/R Portfolio/King County Voting project/voting image.webp)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_libraries, warning=FALSE, message=FALSE}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(forcats)
+```
+
+```{r import_data, cache=TRUE}
+election_data_raw <- read_csv("king_county_elections_2016.txt")
+```
+
+## Inspecting the data
+
+```{r}
+glimpse(election_data_raw)
+election_data_raw %>%
+    distinct(Precinct) %>%
+    head(10)
+election_data_raw %>%
+    distinct(Race) %>%
+    head(10)
+election_data_raw %>%
+    distinct(CounterGroup) %>%
+    head(10)
+election_data_raw %>%
+    distinct(Party) %>%
+    head(10)
+election_data_raw %>%
+    distinct(CounterType) %>%
+    head(10)
+election_data_raw %>%
+    distinct(SumOfCount) %>%
+    head(10)
+```
+
+This dataset contains 643,163 observations and 9 variable columns. The variable `CounterType` records who or what a person voted for.
+
+
+
+### Examining the Precinct Variable
+
+```{r inspect_precinct}
+election_data_raw %>%
+    count(Precinct) %>%
+    head(10)
+
+election_data_raw %>%
+    count(Precinct) %>%
+    tail(10)
+
+precinct_count <- election_data_raw %>%
+    distinct(Precinct) %>%
+    nrow()
+```
+
+There are `r precinct_count` distinct values appearing the `Precinct` column. 
+
+### Examining the Race Variable
+
+The `Race` column specifies the race for each vote, which can be positions candidates are running for or propositions:
+
+```{r inspect_race}
+election_data_raw %>%
+    count(Race) %>%
+    head(10)
+
+election_data_raw %>%
+    count(Race) %>%
+    tail(10)
+```
+
+
+### Examining the LEG, CC, CG Variables
+
+`LEG`, `CC`, and `CG` are the numbers for legislative district, King County Council district, and Congressional district, repectively. The `LEG` and `CC` variables are missing data for over 200 rows.
+
+```{r inspect_leg_cc_cg}
+election_data_raw %>%
+    select(LEG, CC, CG) %>%
+    summary()
+```
+
+
+```{r sample_missing_leg}
+election_data_raw %>%
+    filter(is.na(LEG)) %>%
+    head(10)
+```
+Rows with this missing data appear to list the `Precinct` as "ELECTIONS OFFICE".  
+
+### Examining the CounterGroup Variable
+
+The column `CounterGroup` only has one value (`Total`), so this column can be dropped completely from the cleaned dataset.
+
+```{r inspect_countergroup}
+election_data_raw %>%
+    count(CounterGroup)
+
+election_data_clean <-
+  election_data_raw %>%
+   select(-c(CounterGroup))
+```
+
+### Examining the Party Variable
+
+`Party` specifies the political parties for each race:
+
+```{r inspect_party}
+election_data_raw %>%
+    count(Party) %>%
+    arrange(desc(n))
+```
+
+Some of the `Party` values have  the same number of values as there are distinct precincts (2517). 
+
+### Examining the CounterType Variable
+
+```{r inspect_countertype}
+election_data_raw %>%
+    count(CounterType) %>%
+    head(20)
+```
+
+The column `CounterType` contains  candidates, position votes (e.g. `"Bob Ferguson"`, `"Approved"`, `"No"`), and  summaries for the particular race in the precinct (e.g. `"Registered Voters"`, `"Times Blank Voted"`, `"Times Counted"`).
+
+
+### Examining the SumOfCount Variable
+
+The `SumOfCount` column contains counts of votes associated with `CounterType`. 
+
+```{r inspect_sumofcount}
+election_data_raw %>%
+    select(SumOfCount) %>%
+    summary()
+```
+
+If we view `CounterType` and `SumOfCount` side by side, the values for `CounterType` are more comprehensible. For the first `Precinct` and `Race`, `"Times Counted"` is 485. This is equal to the sum of `SumOfCount` for all `CounterType` values for that precinct's race except `"Registered Voters"`. Therefore, `"Times Counted"` is the number of votes.
+
+
+```{r}
+election_data_raw %>%
+  select(Precinct, Race, CounterType, SumOfCount)
+```
+
+## Filtering Down the Data
+
+For this project, only **President**, **Governor**, and **Lieutenant Governor** are relavent. To filter down the data, the follow code (1) displays every unique value of `Race` and finds which ones match the three races of interest, then (2) filters the data to those races.
+
+```{r distinct_races, include=FALSE}
+# info on the distinct races
+races <- election_data_raw %>%
+    select(Race) %>%
+    distinct(Race) %>%
+    arrange(Race)
+# print it out as a character vector
+as.character(races$Race)
+```
+
+The races of interest are in positions 26, 79, and 97 of the sorted `races` output.
+
+```{r subset_relevant_races}
+# make a character vector of relevant races
+(filtered_races <- races$Race[c(26, 79, 97)])
+# subset the data to relevant races
+king_filtered_races <- election_data_raw %>%
+    filter(Race %in% filtered_races)
+```
+## Seattle Precincts
+
+How can precints in Seattle be idenitfied?
+```{r look_for_seattle_precincts}
+precincts <- king_filtered_races %>%
+    select(Precinct) %>%
+    distinct(Precinct) %>%
+    arrange(Precinct)
+precincts
+```
+
+Seattle precincts all start with `SEA` followed by a space and a precinct number. However, just the three characters `SEA` on its own won't work because there are precincts called `SEALTH`, `SEAN`, and `SEAVIEW` that are outside of Seattle. The precincts can be filtered to include only those located in Seattle by searching the strings for the first four characters of `Precinct` and check if they are equal to `SEA `.
+
+```{r flag_seattle}
+king_flag <- king_filtered_races %>%
+    mutate(Location = ifelse(substr(Precinct, start = 1, stop = 4) == "SEA ",
+                             "Seattle",
+                             "Not Seattle"))
+```
+
+
+## Registered Voters and Turnout Rates
+
+The turnout rate equals the total votes for a race divided by the number of registered voters.
+
+There's a value in `CounterType` called "Times Counted". It would be nice if this was the numerator we were after. I'm going to check this by summing `SumOfCount` up within each precinct and race of interest over all the rows besides where `CounterType` is "Registered Voters" or "Times Counted". Then I'll compare these to the "Times Counted" rows:
+
+```{r check_times_counted}
+# sum over rows besides "Registered Voters" or "Times Counted" within each precinct and race
+times_counted_manual <- king_flag %>%
+    select(Precinct, Race, CounterType, SumOfCount) %>%
+    filter(CounterType != "Registered Voters" & 
+           CounterType != "Times Counted") %>%
+    group_by(Precinct, Race) %>%
+    summarize(votes_added_up = sum(SumOfCount))
+head(times_counted_manual)
+
+# now just grab the "Times Counted" rows and merge
+times_counted_compare <- king_flag %>%
+    select(Precinct, Race, CounterType, SumOfCount) %>%
+    filter(CounterType == "Times Counted") %>%
+    # rename the column on filtered data for clarity
+    rename(times_counted_value = SumOfCount) %>%
+    left_join(times_counted_manual,
+              by = c("Precinct", "Race")) %>%
+    # compute differences
+    mutate(diff = times_counted_value - votes_added_up)
+
+summary(times_counted_compare$diff)
+```
+
+They appear to be the same. Now we can make a data frame that has registered voters and turnout rates for the Presidential race for each precinct:
+
+```{r calculate_turnout_rates}
+turnout_rates <- king_flag %>%
+    # filter to just the presidential election
+    filter(Race == filtered_races[3]) %>%
+    # filter to just registered voters or times counted
+    filter(CounterType %in% c("Registered Voters", "Times Counted")) %>%
+    # just the columns we want
+    select(Precinct, Location, CounterType, SumOfCount) %>%
+    # use spread to put the two counts on the same row for each precinct
+    pivot_wider(names_from = CounterType, values_from = SumOfCount) %>%
+    # use new columns to compute turnout rate
+    mutate(Turnout = `Times Counted` / `Registered Voters`)
+head(turnout_rates)
+```
